@@ -1,0 +1,436 @@
+<html><head><base href="https://websim.ai/3d-platformer/" />
+<title>Infinite</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.9.0/nipplejs.min.js"></script>
+<style>
+  body { margin: 0; overflow: hidden; background-color: #000; }
+  #instructions, #stats, #characterSelector {
+    position: absolute;
+    color: #fff;
+    font-family: 'Arial', sans-serif;
+    background-color: rgba(0,0,0,0.7);
+    padding: 15px;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(255,255,255,0.3);
+  }
+  #instructions {
+    top: 20px;
+    left: 20px;
+    max-width: 300px;
+  }
+  #stats {
+    top: 20px;
+    right: 20px;
+  }
+  #characterSelector {
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: none;
+    text-align: center;
+  }
+  h2 { margin-top: 0; color: #4fc3f7; }
+  #joystickZone {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    width: 150px;
+    height: 150px;
+  }
+  #jumpButton {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 80px;
+    height: 80px;
+    background-color: rgba(255,255,255,0.5);
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 24px;
+    color: #fff;
+    user-select: none;
+  }
+  #changeCharacterButton {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 10px 20px;
+    background-color: rgba(255,255,255,0.5);
+    border: none;
+    border-radius: 5px;
+    color: #fff;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  .character-option {
+    display: inline-block;
+    margin: 10px;
+    cursor: pointer;
+  }
+  .character-option img {
+    width: 100px;
+    height: 100px;
+    object-fit: contain;
+  }
+</style>
+</head>
+<body>
+<div id="instructions">
+  <h2>Infinite 3D Platformer</h2>
+  <p>Use the joystick to move, tap the jump button to jump</p>
+  <p>Traverse the colorful platforms in this psychedelic world!</p>
+</div>
+<div id="stats">
+  <p>Platforms Jumped: <span id="platformsJumped">0</span></p>
+  <p>Deaths: <span id="deaths">0</span></p>
+</div>
+<div id="joystickZone"></div>
+<div id="jumpButton">JUMP</div>
+<button id="changeCharacterButton">Change Character</button>
+<div id="characterSelector">
+  <h2>Select Your Pokemon</h2>
+  <div id="characterOptions"></div>
+</div>
+<script>
+let scene, camera, renderer, player, platforms = [], jumpForce = 0, gravity = -9.8, velocity = 0, canJump = false;
+let platformsJumped = 0, deaths = 0, lastPlatformIndex = 0;
+let lastHue = 0;
+let warpedSky;
+let joystickData = { x: 0, y: 0 };
+let joystickManager;
+
+const pokemonCharacters = [
+  { name: "Venipede", region: "Unova", spriteUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/543.png" },
+  { name: "Shellos", region: "Sinnoh", spriteUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/422.png" },
+  { name: "Palkia", region: "Sinnoh", spriteUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/484.png" },
+  { name: "Shedinja", region: "Hoenn", spriteUrl: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/292.png" },
+  { name: "Bellibolt", region: "Paldea", spriteUrl: "/a/6291b008-41ae-4098-8df8-74d88c723b98" },
+  { name: "Jumpluff", region: "Johto", spriteUrl: "/a/597402b2-4570-4901-9170-cd426b576ce6" },
+  { name: "Buzzwole", region: "Alola", spriteUrl: "/a/4afd0325-056c-4a2d-8b27-3a6bfd8360e7" },
+  { name: "Marshadow", region: "Alola", spriteUrl: "/a/1a1240a4-5a42-472d-b8ef-5e7e7f7e18c6" }
+];
+
+let currentCharacterIndex = 0;
+
+function init() {
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(0x000000);
+  document.body.appendChild(renderer.domElement);
+
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+  scene.add(ambientLight);
+
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  directionalLight.position.set(5, 5, 5);
+  scene.add(directionalLight);
+
+  player = createPlayer(pokemonCharacters[currentCharacterIndex].spriteUrl);
+  scene.add(player);
+
+  camera.position.set(0, 3, 5);
+  camera.lookAt(player.position);
+
+  createPlatform(0, -1, 0, 5, 1, 5);
+  createPlatform(10, 0, 0, 5, 1, 5);
+
+  warpedSky = createWarpedSky();
+
+  window.addEventListener('resize', onWindowResize, false);
+  window.addEventListener('orientationchange', () => {
+    setTimeout(resetJoystick, 100);
+  });
+
+  initJoystick();
+  initJumpButton();
+  initChangeCharacterButton();
+  populateCharacterSelector();
+}
+
+function createPlayer(spriteUrl) {
+  const loader = new THREE.TextureLoader();
+  const texture = loader.load(spriteUrl);
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  
+  const aspectRatio = texture.image ? texture.image.width / texture.image.height : 1;
+  const width = 2;
+  const height = width / aspectRatio;
+  
+  const geometry = new THREE.PlaneGeometry(width, height);
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    side: THREE.DoubleSide
+  });
+  
+  const player = new THREE.Mesh(geometry, material);
+  player.position.set(0, 1, 0);
+
+  const light = new THREE.PointLight(0xffffff, 1, 5);
+  player.add(light);
+
+  return player;
+}
+
+function createPlatform(x, y, z, width, height, depth) {
+  lastHue = (lastHue + 30) % 360;
+  const color = new THREE.Color(`hsl(${lastHue}, 100%, 50%)`);
+  const geometry = new THREE.BoxGeometry(width, height, depth);
+  const material = new THREE.MeshPhongMaterial({
+    color: color,
+    specular: 0xffffff,
+    shininess: 30,
+    transparent: true,
+    opacity: 0.8
+  });
+  const platform = new THREE.Mesh(geometry, material);
+  platform.position.set(x, y, z);
+  platform.userData.originalColor = color;
+  scene.add(platform);
+  platforms.push(platform);
+
+  const light = new THREE.PointLight(color, 1, 10);
+  light.position.set(0, 1, 0);
+  light.visible = false;
+  platform.add(light);
+}
+
+function createWarpedSky() {
+  const geometry = new THREE.SphereGeometry(500, 60, 40);
+  geometry.scale(-1, 1, 1);
+
+  const uniforms = {
+    time: { value: 1.0 },
+    resolution: { value: new THREE.Vector2() }
+  };
+
+  const material = new THREE.ShaderMaterial({
+    uniforms: uniforms,
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float time;
+      uniform vec2 resolution;
+      varying vec2 vUv;
+      
+      void main() {
+        vec2 p = -1.0 + 2.0 * vUv;
+        float a = time * 40.0;
+        float d, e, f, g = 1.0 / 40.0, h, i, r, q;
+        
+        e = 400.0 * (p.x * 0.5 + 0.5);
+        f = 400.0 * (p.y * 0.5 + 0.5);
+        i = 200.0 + sin(e * g + a / 150.0) * 20.0;
+        d = 200.0 + cos(f * g / 2.0) * 18.0 + cos(e * g) * 7.0;
+        r = sqrt(pow(abs(i - e), 2.0) + pow(abs(d - f), 2.0));
+        q = f / r;
+        e = (r * cos(q)) - a / 2.0;
+        f = (r * sin(q)) - a / 2.0;
+        d = sin(e * g) * 176.0 + sin(e * g) * 164.0 + r;
+        h = ((f + d) + a / 2.0) * g;
+        i = cos(h + r * p.x / 1.3) * (e + e + a) + cos(q * g * 6.0) * (r + h / 3.0);
+        h = sin(f * g) * 144.0 - sin(e * g) * 212.0 * p.x;
+        h = (h + (f - e) * q + sin(r - (a + h) / 7.0) * 10.0 + i / 4.0) * g;
+        i += cos(h * 2.3 * sin(a / 350.0 - q)) * 184.0 * sin(q - (r * 4.3 + a / 12.0) * g) + tan(r * g + h) * 184.0 * cos(r * g + h);
+        i = mod(i / 5.6, 256.0) / 64.0;
+        if (i < 0.0) i += 4.0;
+        if (i >= 2.0) i = 4.0 - i;
+        d = r / 350.0;
+        d += sin(d * d * 8.0) * 0.52;
+        f = (sin(a * g) + 1.0) / 2.0;
+        gl_FragColor = vec4(vec3(f * i / 1.6, i / 2.0 + d / 13.0, i) * d * p.x + vec3(i / 1.3 + d / 8.0, i / 2.0 + d / 18.0, i) * d * (1.0 - p.x), 1.0);
+      }
+    `
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  scene.add(mesh);
+
+  return { uniforms: uniforms, mesh: mesh };
+}
+
+function onWindowResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  warpedSky.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+  resetJoystick();
+}
+
+function initJoystick() {
+  if (joystickManager) {
+    joystickManager.destroy();
+  }
+  
+  const options = {
+    zone: document.getElementById('joystickZone'),
+    color: 'white',
+    size: 120,
+    multitouch: true,
+    maxNumberOfNipples: 1,
+    restJoystick: true,
+    restOpacity: 0.5,
+    mode: 'static',
+    position: { left: '50%', top: '50%' }
+  };
+  
+  joystickManager = nipplejs.create(options);
+  
+  joystickManager.on('move', (evt, data) => {
+    const forward = data.vector.y;
+    const turn = data.vector.x;
+    joystickData = { x: turn, y: forward };
+  });
+
+  joystickManager.on('end', () => {
+    joystickData = { x: 0, y: 0 };
+  });
+}
+
+function resetJoystick() {
+  initJoystick();
+}
+
+function initJumpButton() {
+  const jumpButton = document.getElementById('jumpButton');
+  jumpButton.addEventListener('touchstart', jump);
+}
+
+function initChangeCharacterButton() {
+  const changeCharacterButton = document.getElementById('changeCharacterButton');
+  changeCharacterButton.addEventListener('click', toggleCharacterSelector);
+}
+
+function toggleCharacterSelector() {
+  const selector = document.getElementById('characterSelector');
+  selector.style.display = selector.style.display === 'none' ? 'block' : 'none';
+}
+
+function populateCharacterSelector() {
+  const characterOptions = document.getElementById('characterOptions');
+  pokemonCharacters.forEach((pokemon, index) => {
+    const option = document.createElement('div');
+    option.className = 'character-option';
+    option.innerHTML = `
+      <img src="${pokemon.spriteUrl}" alt="${pokemon.name}">
+      <p>${pokemon.name} (${pokemon.region})</p>
+    `;
+    option.addEventListener('click', () => changeCharacter(index));
+    characterOptions.appendChild(option);
+  });
+}
+
+function changeCharacter(index) {
+  currentCharacterIndex = index;
+  const newTexture = new THREE.TextureLoader().load(pokemonCharacters[index].spriteUrl);
+  newTexture.magFilter = THREE.NearestFilter;
+  newTexture.minFilter = THREE.NearestFilter;
+  
+  const aspectRatio = newTexture.image ? newTexture.image.width / newTexture.image.height : 1;
+  const width = 2;
+  const height = width / aspectRatio;
+  
+  player.geometry = new THREE.PlaneGeometry(width, height);
+  player.material.map = newTexture;
+  player.material.needsUpdate = true;
+  
+  toggleCharacterSelector();
+}
+
+function jump() {
+  if (canJump) {
+    velocity = Math.sqrt(-2 * gravity * 2);
+    canJump = false;
+  }
+}
+
+function update() {
+  const speed = 0.1;
+  player.position.z -= joystickData.y * speed;
+  player.position.x += joystickData.x * speed;
+
+  player.rotation.y = Math.atan2(camera.position.x - player.position.x, camera.position.z - player.position.z);
+
+  velocity += gravity * 0.016;
+  player.position.y += velocity * 0.016;
+
+  let isOnPlatform = false;
+  platforms.forEach((platform, index) => {
+    if (checkCollision(player, platform)) {
+      if (velocity < 0) {
+        player.position.y = platform.position.y + platform.geometry.parameters.height / 2 + 1;
+        velocity = 0;
+        canJump = true;
+        isOnPlatform = true;
+        platform.children[0].visible = true;
+        if (index > lastPlatformIndex) {
+          platformsJumped++;
+          lastPlatformIndex = index;
+          document.getElementById('platformsJumped').textContent = platformsJumped;
+        }
+      }
+    } else {
+      platform.children[0].visible = false;
+    }
+  });
+
+  if (player.position.y < -10) {
+    player.position.set(0, 5, 0);
+    velocity = 0;
+    deaths++;
+    platformsJumped = 0;
+    document.getElementById('deaths').textContent = deaths;
+    document.getElementById('platformsJumped').textContent = platformsJumped;
+    lastPlatformIndex = 0;
+  }
+
+  camera.position.x = player.position.x;
+  camera.position.y = player.position.y + 3;
+  camera.position.z = player.position.z + 5;
+  camera.lookAt(player.position);
+
+  warpedSky.mesh.position.set(player.position.x, player.position.y, player.position.z);
+
+  if (player.position.distanceTo(platforms[platforms.length - 1].position) < 3) {
+    const lastPlatform = platforms[platforms.length - 1];
+    createPlatform(
+      lastPlatform.position.x + 10 + Math.random() * 5,
+      lastPlatform.position.y + (Math.random() - 0.5) * 3,
+      lastPlatform.position.z + (Math.random() - 0.5) * 5,
+      5, 1, 5
+    );
+  }
+}
+
+function checkCollision(obj1, obj2) {
+  const box1 = new THREE.Box3().setFromObject(obj1);
+  const box2 = new THREE.Box3().setFromObject(obj2);
+  return box1.intersectsBox(box2);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  
+  const time = performance.now() * 0.001;
+  warpedSky.uniforms.time.value = time;
+  
+  update();
+  renderer.render(scene, camera);
+}
+
+init();
+animate();
+</script>
+</body>
+</html>
